@@ -12,6 +12,12 @@ sudo apt install squid apache2-utils curl ufw iptables -y
 echo "Quantos proxies você deseja gerar?"
 read NUM_PROXIES
 
+# Validar a entrada do número de proxies
+if [[ ! "$NUM_PROXIES" =~ ^[0-9]+$ ]] || [ "$NUM_PROXIES" -le 0 ]; then
+    echo "Número inválido de proxies. Por favor, insira um número maior que 0."
+    exit 1
+fi
+
 # Criar arquivo de autenticação
 echo "Criando o arquivo de autenticação para $NUM_PROXIES proxies..."
 sudo touch /etc/squid/usuarios_squid
@@ -35,6 +41,10 @@ echo "Credenciais geradas:" > $CREDENCIAIS_FILE
 
 # Detecção do IP público da VPS automaticamente
 IP_PUB=$(curl -s https://api.ipify.org)
+if [ -z "$IP_PUB" ]; then
+    echo "Falha ao detectar o IP público. Verifique sua conexão de rede."
+    exit 1
+fi
 echo "IP Público Detectado: $IP_PUB"
 
 # Gerar múltiplos usuários e senhas no formato IP:PORTA:USUÁRIO:SENHA
@@ -42,7 +52,8 @@ for i in $(seq 1 $NUM_PROXIES); do
     # Gerar uma porta única para cada proxy
     PORTA=$((20000 + $i))  # Porta única gerada para cada proxy
     
-    USER="usuario$(openssl rand -base64 6)"
+    # Gerar usuário e senha sem prefixo
+    USER=$(openssl rand -base64 6)
     PASS=$(openssl rand -base64 12)
     
     # Adicionar usuário e senha no arquivo de autenticação
@@ -77,6 +88,10 @@ done
 # Verificação e ajuste do IP público (caso mude o IP)
 echo "Verificando o IP público..."
 IP_ATUAL=$(curl -s https://api.ipify.org)
+if [ -z "$IP_ATUAL" ]; then
+    echo "Falha ao detectar o IP atual. Verifique sua conexão de rede."
+    exit 1
+fi
 
 # Configurar o firewall para aceitar apenas o IP público atual
 echo "Configurando firewall para o IP público: $IP_ATUAL..."
