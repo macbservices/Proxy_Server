@@ -102,8 +102,13 @@ EOL
   echo "Email enviado com sucesso!"
 }
 
-# Enviar email com os proxies após a instalação
-enviar_email
+# Tentar enviar o email, se falhar, salvar a lista localmente
+if ! enviar_email; then
+  echo "Falha ao enviar e-mail. A lista de proxies foi salva localmente."
+  PROXY_FILE_PATH="/var/log/proxy_list.txt"
+  cp $PROXY_LIST $PROXY_FILE_PATH
+  echo "Arquivo com a lista de proxies salva em: $PROXY_FILE_PATH"
+fi
 
 # Configurar reinício automático para IP dinâmico
 MONITOR_SCRIPT="/usr/local/bin/monitor_ip.sh"
