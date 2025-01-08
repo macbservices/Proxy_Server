@@ -1,131 +1,96 @@
 #!/bin/bash
 
-# Atualizar o sistema
-echo "Atualizando o sistema..."
-sudo apt update && sudo apt upgrade -y
+# Função para gerar a senha aleatória
+generate_password() {
+    openssl rand -base64 12
+}
 
-# Instalar Squid, Apache2-utils, e ferramentas de redirecionamento
-echo "Instalando o Squid, utilitários necessários e ferramentas de redirecionamento..."
-sudo apt install squid apache2-utils curl ufw iptables -y
+# Função para gerar o nome de usuário aleatório
+generate_username() {
+    openssl rand -base64 8
+}
 
-# Perguntar quantos proxies deseja gerar
-echo "Quantos proxies você deseja gerar?"
-read NUM_PROXIES
+# Função para obter o IP público da VPS
+get_public_ip() {
+    PUBLIC_IP=$(curl -s https://api.ipify.org)
+    echo $PUBLIC_IP
+}
 
-# Validar a entrada do número de proxies
-if [[ ! "$NUM_PROXIES" =~ ^[0-9]+$ ]] || [ "$NUM_PROXIES" -le 0 ]; then
-    echo "Número inválido de proxies. Por favor, insira um número maior que 0."
-    exit 1
-fi
-
-# Criar arquivo de autenticação
-echo "Criando o arquivo de autenticação para $NUM_PROXIES proxies..."
-sudo touch /etc/squid/usuarios_squid
-
-# Definir o caminho para a pasta /tmp e arquivo de credenciais
-CREDENCIAIS_DIR="/tmp"
-CREDENCIAIS_FILE="$CREDENCIAIS_DIR/proxies.txt"
-
-# Verificar se já existe um arquivo com esse nome e renomear se necessário
-if [ -f "$CREDENCIAIS_FILE" ]; then
-    # Encontrar o próximo número disponível
-    COUNTER=1
-    while [ -f "$CREDENCIAIS_DIR/proxies$COUNTER.txt" ]; do
-        COUNTER=$((COUNTER+1))
-    done
-    CREDENCIAIS_FILE="$CREDENCIAIS_DIR/proxies$COUNTER.txt"
-fi
-
-echo "Salvando as credenciais em: $CREDENCIAIS_FILE"
-echo "Credenciais geradas:" > $CREDENCIAIS_FILE
-
-# Detecção do IP público da VPS automaticamente
-IP_PUB=$(curl -s https://api.ipify.org)
-if [ -z "$IP_PUB" ]; then
-    echo "Falha ao detectar o IP público. Verifique sua conexão de rede."
-    exit 1
-fi
-echo "IP Público Detectado: $IP_PUB"
-
-# Gerar múltiplos usuários e senhas no formato IP:PORTA:USUÁRIO:SENHA
-for i in $(seq 1 $NUM_PROXIES); do
-    # Gerar uma porta única para cada proxy
-    PORTA=$((20000 + $i))  # Porta única gerada para cada proxy
+# Função para configurar o Squid para permitir o IP, porta e usuário
+configure_squid() {
+    local ip="$1"
+    local port="$2"
+    local username="$3"
+    local password="$4"
     
-    # Gerar usuário e senha sem prefixo
-    USER=$(openssl rand -base64 6)
-    PASS=$(openssl rand -base64 12)
+    # Caminho para o arquivo de configuração do Squid
+    SQUID_CONFIG="/etc/squid/squid.conf"
+
+    # Adicionar exceção de IP, porta e usuário na configuração
+    echo "acl allowed_ips src $ip" | sudo tee -a $SQUID_CONFIG > /dev/null
+    echo "acl allowed_ports port $port" | sudo tee -a $SQUID_CONFIG > /dev/null
+    echo "acl allowed_users proxy_auth $username" | sudo tee -a $SQUID_CONFIG > /dev/null
+
+    # Permitir acesso para os IPs, portas e usuários configurados
+    echo "http_access allow allowed_ips allowed_ports allowed_users" | sudo tee -a $SQUID_CONFIG > /dev/null
+
+    # Reiniciar o Squid para aplicar as mudanças
+    sudo systemctl restart squid
+}
+
+# Função para limpar configurações antigas no Squid
+clean_squid_config() {
+    # Caminho para o arquivo de configuração do Squid
+    SQUID_CONFIG="/etc/squid/squid.conf"
     
-    # Adicionar usuário e senha no arquivo de autenticação
-    echo "Usuário $i: $USER"
-    echo "Senha $i: $PASS"
-    sudo htpasswd -b /etc/squid/usuarios_squid $USER $PASS
+    # Remover as exceções de IP, porta e usuário
+    sudo sed -i '/acl allowed_ips src/d' $SQUID_CONFIG
+    sudo sed -i '/acl allowed_ports port/d' $SQUID_CONFIG
+    sudo sed -i '/acl allowed_users proxy_auth/d' $SQUID_CONFIG
+    sudo sed -i '/http_access allow allowed_ips allowed_ports allowed_users/d' $SQUID_CONFIG
     
-    # Gerar a linha de proxy no formato desejado e salvar no arquivo
-    PROXY="$IP_PUB:$PORTA:$USER:$PASS"
-    echo "$PROXY" >> $CREDENCIAIS_FILE
-done
+    # Reiniciar o Squid para aplicar as mudanças
+    sudo systemctl restart squid
+}
 
-# Configuração do Squid para as portas únicas
-echo "Configurando o Squid para múltiplas portas..."
-sudo bash -c 'cat > /etc/squid/squid.conf <<EOF
-http_port 3128
-auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/usuarios_squid
-auth_param basic realm "Autenticacao Proxy"
-acl authenticated proxy_auth REQUIRED
-http_access allow authenticated
-http_access deny all
-visible_hostname proxy-servidor
-EOF'
+# Função principal para criar proxies
+create_proxy() {
+    echo "Quantos proxies você deseja criar?"
+    read num_proxies
 
-# Ajuste do firewall para permitir tráfego nas portas do proxy
-echo "Configurando o firewall para as portas..."
-for i in $(seq 1 $NUM_PROXIES); do
-    PORTA=$((20000 + $i))
-    sudo ufw allow $PORTA/tcp
-done
+    # Caminho para salvar a lista de proxies
+    LIST_PATH="/tmp/proxy_list.txt"
 
-# Verificação e ajuste do IP público (caso mude o IP)
-echo "Verificando o IP público..."
-IP_ATUAL=$(curl -s https://api.ipify.org)
-if [ -z "$IP_ATUAL" ]; then
-    echo "Falha ao detectar o IP atual. Verifique sua conexão de rede."
-    exit 1
-fi
-
-# Configurar o firewall para aceitar apenas o IP público atual
-echo "Configurando firewall para o IP público: $IP_ATUAL..."
-sudo ufw allow from $IP_ATUAL to any port 3128 proto tcp
-
-# Redirecionamento de portas usando iptables para garantir o funcionamento do proxy
-echo "Configurando redirecionamento de portas para 80 ou 443..."
-for i in $(seq 1 $NUM_PROXIES); do
-    PORTA=$((20000 + $i))
-    
-    # Verificar se a porta 80 ou 443 estão abertas e redirecionar o tráfego
-    if nc -zv 127.0.0.1 $PORTA 2>/dev/null; then
-        echo "A porta $PORTA está liberada."
-    else
-        # Se a porta do proxy não estiver liberada, redireciona para 80 ou 443
-        if nc -zv 127.0.0.1 80 2>/dev/null; then
-            echo "Redirecionando tráfego da porta $PORTA para 80..."
-            sudo iptables -t nat -A PREROUTING -p tcp --dport $PORTA -j REDIRECT --to-port 80
-        elif nc -zv 127.0.0.1 443 2>/dev/null; then
-            echo "Redirecionando tráfego da porta $PORTA para 443..."
-            sudo iptables -t nat -A PREROUTING -p tcp --dport $PORTA -j REDIRECT --to-port 443
-        fi
+    # Verificar se já existe uma lista anterior e excluí-la
+    if [ -f "$LIST_PATH" ]; then
+        echo "Lista anterior encontrada. Excluindo..."
+        rm $LIST_PATH
     fi
-done
 
-# Reiniciar o Squid para aplicar as configurações
-echo "Reiniciando o Squid..."
-sudo systemctl restart squid
+    # Limpar configurações antigas do Squid antes de adicionar novas exceções
+    clean_squid_config
 
-# Verificar status do Squid
-echo "Verificando o status do Squid..."
-sudo systemctl status squid --no-pager
+    COUNTER=1
 
-# Exibir o caminho para o arquivo de credenciais
-echo "Configuração concluída!"
-echo "O proxy está funcionando na porta 3128 e nas portas $PORTA."
-echo "As credenciais foram salvas em: $CREDENCIAIS_FILE"
+    # Loop para criar múltiplos proxies
+    for i in $(seq 1 $num_proxies); do
+        IP=$(get_public_ip)
+        PORT=$((20000 + COUNTER))
+        USERNAME=$(generate_username)
+        PASSWORD=$(generate_password)
+
+        # Adicionar a entrada no arquivo de configuração do Squid
+        configure_squid $IP $PORT $USERNAME $PASSWORD
+
+        # Salvar os proxies gerados no arquivo de lista
+        echo "$IP:$PORT:$USERNAME:$PASSWORD" >> $LIST_PATH
+
+        echo "Proxy $COUNTER criado com sucesso!"
+        COUNTER=$((COUNTER + 1))
+    done
+
+    echo "Lista de proxies salva em $LIST_PATH"
+}
+
+# Chamar a função para criar os proxies
+create_proxy
