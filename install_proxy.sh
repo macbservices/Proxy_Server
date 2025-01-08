@@ -16,8 +16,20 @@ read NUM_PROXIES
 echo "Criando o arquivo de autenticação para $NUM_PROXIES proxies..."
 sudo touch /etc/squid/usuarios_squid
 
-# Criar arquivo para salvar as credenciais em /home
-CREDENCIAIS_FILE="/home/proxies.txt"
+# Definir o caminho para a pasta /tmp e arquivo de credenciais
+CREDENCIAIS_DIR="/tmp"
+CREDENCIAIS_FILE="$CREDENCIAIS_DIR/proxies.txt"
+
+# Verificar se já existe um arquivo com esse nome e renomear se necessário
+if [ -f "$CREDENCIAIS_FILE" ]; then
+    # Encontrar o próximo número disponível
+    COUNTER=1
+    while [ -f "$CREDENCIAIS_DIR/proxies$COUNTER.txt" ]; do
+        COUNTER=$((COUNTER+1))
+    done
+    CREDENCIAIS_FILE="$CREDENCIAIS_DIR/proxies$COUNTER.txt"
+fi
+
 echo "Salvando as credenciais em: $CREDENCIAIS_FILE"
 echo "Credenciais geradas:" > $CREDENCIAIS_FILE
 
