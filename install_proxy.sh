@@ -75,6 +75,14 @@ done
 # Função para enviar a lista de proxies por email
 enviar_email() {
   echo "Enviando lista de proxies por email..."
+  
+  # Verificar o conteúdo da lista de proxies antes de enviar
+  if [ ! -s "$PROXY_LIST" ]; then
+    echo "Erro: A lista de proxies está vazia!" >&2
+    return 1
+  fi
+  
+  # Enviar o email
   cat <<EOL | msmtp -t
 To: $RECIPIENT
 From: $GMAIL_USER
@@ -84,6 +92,14 @@ Segue a lista dos proxies atualizados:
 
 $(cat $PROXY_LIST)
 EOL
+
+  # Verificar se o msmtp retornou erro
+  if [ $? -ne 0 ]; then
+    echo "Erro ao enviar o e-mail!" >&2
+    return 1
+  fi
+
+  echo "Email enviado com sucesso!"
 }
 
 # Enviar email com os proxies após a instalação
