@@ -86,7 +86,8 @@ $(cat $PROXY_LIST)
 EOL
 }
 
-enviar_email  # Enviar email inicial
+# Enviar email com os proxies após a instalação
+enviar_email
 
 # Configurar reinício automático para IP dinâmico
 MONITOR_SCRIPT="/usr/local/bin/monitor_ip.sh"
