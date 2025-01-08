@@ -1,96 +1,91 @@
 #!/bin/bash
 
-# Função para gerar a senha aleatória
-generate_password() {
-    openssl rand -base64 12
+# Verifica se o script está sendo executado como root
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Este script deve ser executado como root."
+    exit 1
+fi
+
+# Atualiza o sistema e instala o Squid
+apt update && apt upgrade -y
+apt install -y squid apache2-utils
+
+# Backup do arquivo de configuração original
+cp /etc/squid/squid.conf /etc/squid/squid.conf.bak
+
+# Define o IP público e o IP interno
+target_ip_public="205.164.75.239"
+target_ip_internal="100.102.90.11"
+
+# Arquivo para salvar os proxies
+proxy_list_file="/etc/squid/proxy_list.txt"
+> "$proxy_list_file" # Limpa o arquivo caso exista
+
+# Gerador de senhas seguras
+function generate_password() {
+  openssl rand -hex 8
 }
 
-# Função para gerar o nome de usuário aleatório
-generate_username() {
-    openssl rand -base64 8
-}
+# Cria um arquivo de senhas para autenticação
+auth_file="/etc/squid/passwords"
+htpasswd -c -b "$auth_file" user_placeholder pass_placeholder # Cria o arquivo inicial
 
-# Função para obter o IP público da VPS
-get_public_ip() {
-    PUBLIC_IP=$(curl -s https://api.ipify.org)
-    echo $PUBLIC_IP
-}
+# Remove o usuário placeholder
+sed -i '/user_placeholder/d' "$auth_file"
 
-# Função para configurar o Squid para permitir o IP, porta e usuário
-configure_squid() {
-    local ip="$1"
-    local port="$2"
-    local username="$3"
-    local password="$4"
-    
-    # Caminho para o arquivo de configuração do Squid
-    SQUID_CONFIG="/etc/squid/squid.conf"
+# Configurações básicas do Squid
+cat <<EOL > /etc/squid/squid.conf
+http_port 3128
+acl localnet src $target_ip_internal/32
+acl Safe_ports port 80		# http
+acl Safe_ports port 443		# https
+acl Safe_ports port 3128	# proxy default
+acl CONNECT method CONNECT
 
-    # Adicionar exceção de IP, porta e usuário na configuração
-    echo "acl allowed_ips src $ip" | sudo tee -a $SQUID_CONFIG > /dev/null
-    echo "acl allowed_ports port $port" | sudo tee -a $SQUID_CONFIG > /dev/null
-    echo "acl allowed_users proxy_auth $username" | sudo tee -a $SQUID_CONFIG > /dev/null
+# Configuração de autenticação
+auth_param basic program /usr/lib/squid/basic_ncsa_auth $auth_file
+auth_param basic realm Proxy
+acl authenticated proxy_auth REQUIRED
 
-    # Permitir acesso para os IPs, portas e usuários configurados
-    echo "http_access allow allowed_ips allowed_ports allowed_users" | sudo tee -a $SQUID_CONFIG > /dev/null
+# Permitir apenas conexões autenticadas
+http_access allow authenticated
+http_access deny all
 
-    # Reiniciar o Squid para aplicar as mudanças
-    sudo systemctl restart squid
-}
+# Configurações de log
+access_log /var/log/squid/access.log squid
+cache_log /var/log/squid/cache.log
 
-# Função para limpar configurações antigas no Squid
-clean_squid_config() {
-    # Caminho para o arquivo de configuração do Squid
-    SQUID_CONFIG="/etc/squid/squid.conf"
-    
-    # Remover as exceções de IP, porta e usuário
-    sudo sed -i '/acl allowed_ips src/d' $SQUID_CONFIG
-    sudo sed -i '/acl allowed_ports port/d' $SQUID_CONFIG
-    sudo sed -i '/acl allowed_users proxy_auth/d' $SQUID_CONFIG
-    sudo sed -i '/http_access allow allowed_ips allowed_ports allowed_users/d' $SQUID_CONFIG
-    
-    # Reiniciar o Squid para aplicar as mudanças
-    sudo systemctl restart squid
-}
+# Otimizações de performance
+cache_mem 64 MB
+maximum_object_size_in_memory 512 KB
+maximum_object_size 1024 MB
+cache_dir ufs /var/spool/squid 100 16 256
 
-# Função principal para criar proxies
-create_proxy() {
-    echo "Quantos proxies você deseja criar?"
-    read num_proxies
+# Configuração personalizada de proxy
+visible_hostname proxy-server
+EOL
 
-    # Caminho para salvar a lista de proxies
-    LIST_PATH="/tmp/proxy_list.txt"
+# Configuração de múltiplos proxies
+for i in $(seq 1 10); do
+  port=$((20000 + i))
+  username="user_$i"
+  password="$(generate_password)"
 
-    # Verificar se já existe uma lista anterior e excluí-la
-    if [ -f "$LIST_PATH" ]; then
-        echo "Lista anterior encontrada. Excluindo..."
-        rm $LIST_PATH
-    fi
+  # Adiciona o usuário ao arquivo de senhas
+  htpasswd -b "$auth_file" "$username" "$password"
 
-    # Limpar configurações antigas do Squid antes de adicionar novas exceções
-    clean_squid_config
+  # Adiciona a configuração do proxy ao Squid
+  echo "http_port $target_ip_public:$port" >> /etc/squid/squid.conf
 
-    COUNTER=1
+  # Salva no arquivo de lista de proxies
+  echo "$target_ip_public:$port:$username:$password" >> "$proxy_list_file"
+done
 
-    # Loop para criar múltiplos proxies
-    for i in $(seq 1 $num_proxies); do
-        IP=$(get_public_ip)
-        PORT=$((20000 + COUNTER))
-        USERNAME=$(generate_username)
-        PASSWORD=$(generate_password)
+# Reinicia o serviço Squid
+systemctl restart squid
+systemctl enable squid
 
-        # Adicionar a entrada no arquivo de configuração do Squid
-        configure_squid $IP $PORT $USERNAME $PASSWORD
-
-        # Salvar os proxies gerados no arquivo de lista
-        echo "$IP:$PORT:$USERNAME:$PASSWORD" >> $LIST_PATH
-
-        echo "Proxy $COUNTER criado com sucesso!"
-        COUNTER=$((COUNTER + 1))
-    done
-
-    echo "Lista de proxies salva em $LIST_PATH"
-}
-
-# Chamar a função para criar os proxies
-create_proxy
+# Exibe as informações
+echo "\nSquid instalado e configurado com sucesso!"
+echo "Os seguintes proxies estão disponíveis (salvos em $proxy_list_file):"
+cat "$proxy_list_file"
