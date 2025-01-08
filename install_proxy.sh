@@ -2,6 +2,7 @@
 
 # Script para configurar automaticamente um servidor de proxy com Squid em Ubuntu 20.04 usando rede 4G
 # Inclui envio de lista de proxies por email a cada mudança de IP.
+# Adiciona a solução para contornar bloqueio de portas, configurando o proxy na porta 443 (HTTPS)
 
 # Verificar se o script está sendo executado como root
 if [ "$EUID" -ne 0 ]; then
@@ -9,10 +10,16 @@ if [ "$EUID" -ne 0 ]; then
   exit
 fi
 
-# Variáveis para configuração do envio de email
-GMAIL_USER="seu_email@gmail.com"  # Substituir pelo email do Gmail
-GMAIL_PASS="sua_senha_do_app"      # Substituir pela senha do aplicativo (não a senha principal)
-RECIPIENT="destinatario@gmail.com"  # Substituir pelo email do destinatário
+# Perguntar ao usuário o Gmail e o destinatário do email
+echo "Por favor, informe o Gmail para envio da lista de proxies:"
+read GMAIL_USER
+
+echo "Por favor, informe a senha do app (não a senha principal) para o Gmail:"
+read -s GMAIL_PASS
+
+echo "Por favor, informe o email do destinatário:"
+read RECIPIENT
+
 SMTP_SERVER="smtp.gmail.com"
 SMTP_PORT=587
 
@@ -41,7 +48,7 @@ sudo chown root:root $MSMTP_CONFIG
 echo "Criando configuração do Squid..."
 SQUID_CONFIG="/etc/squid/squid.conf"
 sudo mv $SQUID_CONFIG ${SQUID_CONFIG}.bak  # Fazer backup do arquivo original
-echo "http_port 3128" | sudo tee $SQUID_CONFIG > /dev/null
+echo "http_port 443" | sudo tee $SQUID_CONFIG > /dev/null  # Configurando o Squid para usar a porta 443
 echo "acl all src all" | sudo tee -a $SQUID_CONFIG > /dev/null
 echo "http_access allow all" | sudo tee -a $SQUID_CONFIG > /dev/null
 
@@ -106,6 +113,10 @@ for ((PORT=$START_PORT; PORT<$END_PORT; PORT++)); do
   sudo ufw allow $PORT
   echo "Porta $PORT liberada no firewall."
 done
+
+# Liberar a porta 443 para o Squid
+sudo ufw allow 443
+echo "Porta 443 liberada no firewall."
 
 # Reiniciar o Squid
 sudo systemctl restart squid
